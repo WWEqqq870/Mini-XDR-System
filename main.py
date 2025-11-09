@@ -1,9 +1,7 @@
 from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field
 from pymongo import MongoClient
-from rfc3161ng import get_timestamp # هذا الاستيراد هو الوحيد الذي يعمل
-
-# ⚠️ تم حذف محاولات استيراد RFC3161Error و HTTPError التي كانت تسبب التعطّل.
+from rfc3161ng import get_timestamp 
 
 import datetime, hashlib, os, joblib, numpy as np
 
@@ -16,11 +14,15 @@ class EventData(BaseModel):
     event_type: str = Field(..., description="نوع الحدث (مثل: login, file_access, network_alert).")
     details: dict = Field(default_factory=dict, description="تفاصيل إضافية للحدث.")
 
-# Final fix to trigger redeploy
 app = FastAPI()
 
 # Configuration
-MONGO_URI = "mongodb+srv://h59146083_db_user:ky0of5mh6hVXglIL@cluster0.jztcrtp.mongodb.net/?appName=Cluster0"
+# ✅ قراءة سلسلة الاتصال من متغير البيئة
+MONGO_URI = os.getenv("MONGO_URI") 
+if not MONGO_URI:
+    # هذا الخطأ سيظهر في سجلات Railway إذا لم يتم إضافة المتغير
+    raise ValueError("MONGO_URI environment variable is not set!")
+    
 client = MongoClient(MONGO_URI)
 db = client["mini_xdr"]
 events = db["events"]
@@ -35,7 +37,7 @@ else:
     print("⚠️ Warning: AI Model not found. Scoring will be set to 0.0.")
 
 # =================================================================
-# مسارات FastAPI هنا
+# مسارات FastAPI هنا 
 # =================================================================
 
 @app.get("/")
@@ -64,7 +66,7 @@ def score_event(event_data: EventData) -> float:
         # نحول النتيجة إلى درجة خطر (1.0 لخطر عالي، 0.0 لخطر منخفض)
         return 1.0 if prediction == -1 else 0.0
     
-    return 0.0 # درجة الخطر الافتراضية إذا لم يتم تحميل النموذج
+    return 0.0 
 
 def get_rfc3161_timestamp(data_hash):
     # هذه الدالة تتطلب المزيد من التنفيذ
@@ -91,7 +93,7 @@ async def log_event(event: EventData):
     # if timestamp_proof:
     #     event_dict['timestamp_proof'] = timestamp_proof
     
-    # 4. تخزين الحدث في MongoDB (بدلاً من Firestore مؤقتاً)
+    # 4. تخزين الحدث في MongoDB
     try:
         events.insert_one(event_dict)
         return {
@@ -101,9 +103,8 @@ async def log_event(event: EventData):
             "db_status": "Logged to MongoDB"
         }
     except Exception as e:
+        # إذا فشل التخزين، سيعرض هذا الخطأ بدلاً من 500 عام
         return {
             "status": "Failed to log event",
             "error": str(e)
         }
-
-
