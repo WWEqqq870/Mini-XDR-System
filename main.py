@@ -1,22 +1,22 @@
 from fastapi import FastAPI, Request
-    from pymongo import MongoClient
-    from rfc3161ng import get_timestamp         # هذا الاستيراد ناجح
-    
-    # محاولة استيراد الأخطاء، هذا هو التغيير الجديد:
-    try:
-        from rfc3161ng.errors import RFC3161Error, HTTPError
-    except ImportError:
-        try:
-            from rfc3161ng.exceptions import RFC3161Error, HTTPError # محاولة المكان الثالث
-        except ImportError:
-            from rfc3161ng import RFC3161Error, HTTPError # المحاولة الأصلية
-    
-    import datetime, hashlib, os, joblib, numpy as np
-    
-    # Final fix to trigger redeploy
-    app = FastAPI()
+from pymongo import MongoClient
+from rfc3161ng import get_timestamp
 
-# Configuration (Replace if needed, but this is the correct URI)
+# محاولة استيراد الأخطاء بمرونة: نحاول errors، ثم exceptions، ثم المستوى الأعلى.
+try:
+    from rfc3161ng.errors import RFC3161Error, HTTPError
+except ImportError:
+    try:
+        from rfc3161ng.exceptions import RFC3161Error, HTTPError # محاولة المكان الثالث
+    except ImportError:
+        from rfc3161ng import RFC3161Error, HTTPError # المحاولة الأصلية
+
+import datetime, hashlib, os, joblib, numpy as np
+
+# Final fix to trigger redeploy
+app = FastAPI()
+
+# Configuration (Replace if needed, but هذا هو URI الحالي)
 MONGO_URI = "mongodb+srv://h59146083_db_user:ky0of5mh6hVXglIL@cluster0.jztcrtp.mongodb.net/?appName=Cluster0"
 client = MongoClient(MONGO_URI)
 db = client["mini_xdr"]
@@ -27,6 +27,10 @@ MODEL_PATH = "iso_model.joblib"
 model = None
 if os.path.exists(MODEL_PATH):
     model = joblib.load(MODEL_PATH)
+
+# =================================================================
+# يجب أن تكون مسارات FastAPI هنا
+# =================================================================
     print("✅ AI Model Loaded Successfully.")
 else:
     print("⚠️ Warning: AI Model not found. Scoring will be set to 0.0.")
