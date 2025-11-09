@@ -6,9 +6,11 @@ from contextlib import asynccontextmanager
 
 import datetime, hashlib, os, joblib, numpy as np
 from typing import List, Any
-from bson import ObjectId # لإدارة كائنات MongoDB ID
+from bson import ObjectId 
 
+# =================================================================
 # 1. تعريف نموذج الإدخال (Input Model)
+# =================================================================
 class EventDataInput(BaseModel):
     """النموذج المتوقع لحدث أمني يتم إرساله من المصدر."""
     source_ip: str = Field(..., description="عنوان IP المصدر.")
@@ -16,9 +18,12 @@ class EventDataInput(BaseModel):
     event_type: str = Field(..., description="نوع الحدث (مثل: login, file_access, network_alert).")
     details: dict = Field(default_factory=dict, description="تفاصيل إضافية للحدث.")
 
+# =================================================================
 # 2. تعريف نموذج الإخراج والتخزين (Storage/Output Model)
+# =================================================================
 class EventRecord(EventDataInput):
     """النموذج الكامل للحدث كما هو مخزن في قاعدة البيانات (الإخراج)."""
+    # نستخدم alias="_id" لربط الحقل 'id' بـ '_id' في MongoDB
     id: str = Field(alias="_id", default_factory=lambda: str(ObjectId()), description="معرف MongoDB الفريد للحدث.")
     timestamp: datetime.datetime = Field(default_factory=datetime.datetime.now, description="وقت وقوع الحدث.")
     risk_score: float = Field(default=0.0, description="درجة الخطر المحسوبة بواسطة الذكاء الاصطناعي (0.0 - 1.0).")
@@ -28,6 +33,7 @@ class EventRecord(EventDataInput):
         populate_by_name = True
         json_encoders = {ObjectId: str}
         arbitrary_types_allowed = True
+
 # =================================================================
 # تهيئة التطبيق وإدارة الموارد (MongoDB)
 # =================================================================
@@ -57,7 +63,7 @@ async def lifespan(app: FastAPI):
     else:
         print("⚠️ Warning: AI Model not found. Scoring will be set to 0.0.")
 
-    yield # هنا يبدأ التطبيق في استقبال الطلبات
+    yield 
 
     # --- 3. إغلاق اتصال MongoDB عند إيقاف التشغيل ---
     if hasattr(app, 'mongodb_client'):
@@ -65,6 +71,7 @@ async def lifespan(app: FastAPI):
         print("🛑 MongoDB Client closed.")
 
 app = FastAPI(lifespan=lifespan)
+
 # =================================================================
 # وظائف مساعدة
 # =================================================================
@@ -80,7 +87,6 @@ def compute_sha256(obj):
 
 def score_event(event_data: EventDataInput, model) -> float:
     """يحسب درجة الخطر باستخدام نموذج AI."""
-    # ملاحظة: تم تحديث نوع البيانات المتوقع إلى EventDataInput
     if model is not None:
         features = np.array([
             hash(event_data.source_ip) % 1000,
@@ -90,7 +96,8 @@ def score_event(event_data: EventDataInput, model) -> float:
         prediction = model.predict(features)[0]
         return 1.0 if prediction == -1 else 0.0
     
-    return 0.0
+    return 0.0 
+
 # =================================================================
 # مسارات FastAPI الرئيسية
 # =================================================================
@@ -102,6 +109,7 @@ async def list_events():
     try:
         events_list = []
         for event in app.events_collection.find():
+            # تحويل ObjectId إلى str ليتمكن Pydantic من التعامل معه
             event['_id'] = str(event['_id'])
             events_list.append(event)
         
@@ -114,30 +122,32 @@ async def list_events():
 
 
 @app.post("/log", response_model=EventRecord, summary="تسجيل حدث أمني جديد وتحليل الخطر")
-async def log_event(event_input: EventDataInput): # <--- استخدام نموذج الإدخال الجديد
+async def log_event(event_input: EventDataInput):
     """يسجل حدث أمن جديد ويقوم بحساب درجة خطورته."""
     
-    # تحويل نموذج الإدخال إلى قاموس وتحديد الوقت
+    # 1. تحويل نموذج الإدخال إلى قاموس وتحديد الوقت
     event_dict = event_input.model_dump()
     event_dict['timestamp'] = datetime.datetime.now()
     
-    # 1. تحليل وحساب درجة الخطر
+    # 2. تحليل وحساب درجة الخطر
     risk_score = score_event(event_input, app.model)
     event_dict['risk_score'] = risk_score
     
-    # 2. إنشاء سلسلة الحراسة (Chain of Custody) - SHA256
+    # 3. إنشاء سلسلة الحراسة (Chain of Custody) - SHA256
     event_hash = compute_sha256(event_dict)
     event_dict['event_hash'] = event_hash
     
-    # 3. تخزين الحدث في MongoDB
+    # 4. تخزين الحدث في MongoDB
     try:
         result = app.events_collection.insert_one(event_dict)
         
-        # 4. إرجاع الاستجابة بناءً على نموذج EventRecord
-        return EventRecord(
-            _id=str(result.inserted_id),
-            **event_dict
-        )
+        # 5. بناء كائن الاستجابة الصحيح:
+        # نخصص ID الذي تم إنشاؤه من MongoDB في القاموس
+        event_dict['_id'] = str(result.inserted_id)
+        
+        # نستخدم القاموس النهائي event_dict لإنشاء كائن EventRecord
+        # هذا يحل مشكلة 'multiple values for _id' (الخطأ 400)
+        return EventRecord(**event_dict)
 
     except Exception as e:
         raise HTTPException(
