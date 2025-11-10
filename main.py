@@ -102,22 +102,32 @@ def score_event(event_data: EventDataInput, model) -> float:
 # مسارات FastAPI الرئيسية
 # =================================================================
 
-# المسار الجديد: جلب جميع الأحداث
+# =================================================================
+# مسارات FastAPI الرئيسية
+# =================================================================
+
 @app.get("/events", response_model=List[EventRecord], summary="جلب جميع الأحداث الأمنية المسجلة")
 async def list_events():
     """يجلب جميع الوثائق من مجموعة 'events' ويعرضها كقائمة."""
     try:
         events_list = []
         for event in app.events_collection.find():
-            # تحويل ObjectId إلى str ليتمكن Pydantic من التعامل معه
+            
+            # 1. تحويل ObjectId إلى str
             event['_id'] = str(event['_id'])
+            
+            # 2. **الحل النهائي لخطأ التاريخ:** تحويل كائن datetime إلى نص ISO
+            if isinstance(event['timestamp'], datetime.datetime):
+                event['timestamp'] = event['timestamp'].isoformat()
+            
             events_list.append(event)
         
         return events_list
     except Exception as e:
+        # هنا سنعيد الخطأ 500 إذا استمرت المشكلة
         raise HTTPException(
             status_code=500, 
-            detail=f"An error occurred while fetching events: {e}"
+            detail=f"Internal Server Error during data retrieval: {e}"
         )
 
 
