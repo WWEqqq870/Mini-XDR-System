@@ -1,12 +1,19 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from pymongo import MongoClient
 from rfc3161ng import get_timestamp 
 from contextlib import asynccontextmanager
 
 import datetime, hashlib, os, joblib, numpy as np
+import json
 from typing import List, Any
-from bson import ObjectId 
+from bson import ObjectId
+
+# *********************************
+# Imports جديدة لخاصية الإيميل (SOAR)
+import smtplib
+from email.message import EmailMessage
+# *********************************
 
 # =================================================================
 # 1. تعريف نموذج الإدخال (Input Model)
@@ -35,6 +42,87 @@ class EventRecord(EventDataInput):
         arbitrary_types_allowed = True
 
 # =================================================================
+# وظائف SOAR التنفيذية
+# =================================================================
+
+def send_alert_email(event_data: dict):
+    """يرسل بريدًا إلكترونيًا حقيقيًا يحتوي على تفاصيل الحدث."""
+    
+    # يجب أن تكون هذه المتغيرات مضبوطة في إعدادات Railway
+    SENDER_EMAIL = os.getenv("SENDER_EMAIL") 
+    RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
+    PASSWORD = os.getenv("EMAIL_PASSWORD") # كلمة مرور التطبيق (App Password)
+    
+    if not SENDER_EMAIL or not PASSWORD or not RECEIVER_EMAIL:
+        print("SMTP credentials are not set in Railway. Skipping real email alert.")
+        return
+
+    msg = EmailMessage()
+    msg['Subject'] = f"🚨 تنبيه أمني عالي الخطورة: {event_data['event_type']}"
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = RECEIVER_EMAIL
+    
+    # استخدام dumps لتجنب مشاكل التنسيق
+    details = json.dumps(event_data, indent=4, default=str, ensure_ascii=False)
+    
+    msg.set_content(f"""
+[رد آلي - SOAR]
+تم تسجيل حدث أمني عالي الخطورة. يجب اتخاذ إجراء فوري.
+
+تفاصيل الحدث:
+------------------------------------------
+{details}
+------------------------------------------
+""")
+
+    try:
+        # استخدام إعدادات Gmail الموثوقة
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
+            smtp.login(SENDER_EMAIL, PASSWORD)
+            smtp.send_message(msg)
+            print(f"✅ SOAR ACTION: Real alert email sent successfully to {RECEIVER_EMAIL}")
+    except Exception as e:
+        print(f"❌ SOAR FAILURE: Failed to send email alert. Check Railway secrets or App Password: {e}")
+
+
+def isolate_device(ip_address: str):
+    """محاكاة إرسال أمر عزل الجهاز (إثبات نية SOAR)."""
+    # هذا يمثل الأمر الذي سيتم إرساله إلى جدار حماية أو EDR (إثبات منطق SOAR)
+    print(f"🛑 SOAR ACTION: Isolation command issued for IP: {ip_address} (Proof of Intent)")
+
+
+# =================================================================
+# وظائف التوثيق والذكاء الاصطناعي
+# =================================================================
+
+def compute_sha256(data: dict) -> str:
+    """حساب تجزئة SHA256 للحدث لضمان سلسلة الحراسة (CoC)."""
+    # يجب تحويل القاموس إلى سلسلة JSON مرتبة لضمان نفس التجزئة في كل مرة
+    event_string = json.dumps(data, sort_keys=True, default=str).encode('utf-8')
+    return hashlib.sha256(event_string).hexdigest()
+
+def score_event(event_data: dict) -> float:
+    """يحسب درجة الخطر للحدث باستخدام نموذج Isolation Forest."""
+    try:
+        # استخدام مصدر الـ IP ونوع الحدث كميزات
+        ip_feature = int(hashlib.sha1(event_data['source_ip'].encode()).hexdigest(), 16) % (10**8)
+        type_feature = int(hashlib.sha1(event_data['event_type'].encode()).hexdigest(), 16) % (10**8)
+        
+        features = np.array([[ip_feature, type_feature]])
+        
+        # التنبؤ بدرجة الخطر (Isolation Forest يعطي -1 للشاذ و 1 للطبيعي)
+        prediction = app.model.predict(features)[0]
+        
+        # تحويل التنبؤ إلى درجة خطر (1.0 = خطر، 0.0 = آمن)
+        risk_score = 1.0 if prediction == -1 else 0.0
+        
+        return risk_score
+    except Exception as e:
+        print(f"AI scoring failed, defaulting to 0.0: {e}")
+        return 0.0
+
+
+# =================================================================
 # تهيئة التطبيق وإدارة الموارد (MongoDB)
 # =================================================================
 @asynccontextmanager
@@ -47,68 +135,46 @@ async def lifespan(app: FastAPI):
         raise ValueError("MONGO_URI environment variable is not set!")
     
     app.mongodb_client = MongoClient(MONGO_URI)
-    app.mongodb = app.mongodb_client["mini_xdr"]
-    app.events_collection = app.mongodb["events"]
-    print("✅ MongoDB Client and Database Initialized.")
+    # اسم قاعدة البيانات
+    app.database = app.mongodb_client.mini_xdr_db
+    # اسم المجموعة (Collection)
+    app.events_collection = app.database.events
+    print("✅ MongoDB Atlas connection established.")
+    
+    # --- 2. إعداد نموذج الذكاء الاصطناعي ---
+    # تحميل النموذج الذي تم تدريبه مسبقًا
+    try:
+        app.model = joblib.load('isolation_forest_model.pkl')
+        print("✅ AI Model (Isolation Forest) loaded successfully.")
+    except FileNotFoundError:
+        # إذا لم يتم العثور على النموذج، قم بإنشاء نموذج أساسي (مهم للنشر الأول)
+        from sklearn.ensemble import IsolationForest
+        app.model = IsolationForest(contamination='auto', random_state=42).fit([[0,0], [1,1]])
+        print("⚠️ Warning: Pre-trained AI model not found. Created a basic model.")
 
-    # --- 2. تحميل نموذج AI ---
-    MODEL_PATH = "iso_model.joblib"
-    app.model = None
-    if os.path.exists(MODEL_PATH):
-        try:
-            app.model = joblib.load(MODEL_PATH)
-            print("✅ AI Model Loaded Successfully.")
-        except Exception as e:
-             print(f"⚠️ Warning: Failed to load AI Model: {e}")
-    else:
-        print("⚠️ Warning: AI Model not found. Scoring will be set to 0.0.")
 
-    yield 
+    yield # البدء في استقبال الطلبات
 
-    # --- 3. إغلاق اتصال MongoDB عند إيقاف التشغيل ---
-    if hasattr(app, 'mongodb_client'):
-        app.mongodb_client.close()
-        print("🛑 MongoDB Client closed.")
+    # --- 3. إغلاق الاتصالات عند الإغلاق ---
+    app.mongodb_client.close()
+    print("❌ MongoDB connection closed.")
 
-app = FastAPI(lifespan=lifespan)
+
+# تهيئة تطبيق FastAPI
+app = FastAPI(
+    title="Mini-XDR System",
+    description="منصة للكشف عن التهديدات والرد الآلي (XDR/SOAR) باستخدام الذكاء الاصطناعي.",
+    version="1.0.0",
+    docs_url="/docs"
+)
 
 # =================================================================
-# وظائف مساعدة
+# مسارات FastAPI الرئيسية
 # =================================================================
-
 @app.get("/")
 def home():
-    return {"status":"mini XDR running"}
+    return {"status": "mini XDR running and READY!"}
 
-def compute_sha256(obj):
-    # Component: Chain of Custody (SHA256)
-    raw = str(obj).encode()
-    return hashlib.sha256(raw).hexdigest()
-
-def score_event(event_data: EventDataInput, model) -> float:
-    """يحسب درجة الخطر باستخدام نموذج AI."""
-    if model is not None:
-        features = np.array([
-            hash(event_data.source_ip) % 1000,
-            hash(event_data.event_type) % 1000
-        ]).reshape(1, -1)
-        
-        prediction = model.predict(features)[0]
-        return 1.0 if prediction == -1 else 0.0
-    
-    return 0.0 
-
-# =================================================================
-# مسارات FastAPI الرئيسية
-# =================================================================
-
-# =================================================================
-# مسارات FastAPI الرئيسية
-# =================================================================
-
-# =================================================================
-# مسارات FastAPI الرئيسية
-# =================================================================
 
 @app.get("/events", response_model=List[EventRecord], summary="جلب جميع الأحداث الأمنية المسجلة")
 async def list_events():
@@ -119,22 +185,25 @@ async def list_events():
         try:
             # 1. تحويل ObjectId إلى str
             event['_id'] = str(event['_id'])
-
-            # 2. التحقق والتحويل الآمن للـ timestamp (لضمان التوافق)
-            if 'timestamp' in event and isinstance(event['timestamp'], datetime.datetime):
-                event['timestamp'] = event['timestamp'].isoformat()
             
-            # 3. محاولة إنشاء نموذج EventRecord
-            # هذا سيضمن أننا لا نضيف إلا الوثائق الكاملة والصحيحة
+            # 2. التحقق والتحويل الآمن للـ timestamp
+            if 'timestamp' in event and isinstance(event['timestamp'], datetime.datetime):
+                event['timestamp'] = event['timestamp'].isoformat(timespec='milliseconds')
+            
+            # 3. محاولة إنشاء نموذج EventRecord للتحقق من صلاحية البيانات
             validated_event = EventRecord.model_validate(event) 
             events_list.append(validated_event)
 
-        except Exception as e:
-            # تجاهل الوثائق غير الصالحة القديمة
-            print(f"Skipping invalid document: {e}") 
+        except ValidationError as e:
+            # تجاهل الوثائق غير الصالحة (القديمة)
+            print(f"Skipping invalid document due to validation error: {e.errors()[:1]}") 
             continue 
+        except Exception as e:
+            # تجاهل أي أخطاء أخرى غير متوقعة
+            print(f"Skipping document due to unexpected error: {e}")
+            continue
 
-    # إذا حدث خطأ MongoDB نفسه (مثل مشكلة في الاتصال)، نستخدم HTTP Exception
+    # إذا حدث خطأ MongoDB نفسه، نستخدم HTTP Exception
     try:
         return events_list
     except Exception as e:
@@ -142,6 +211,8 @@ async def list_events():
             status_code=500, 
             detail="Error converting documents to response format."
         )
+
+
 @app.post("/log", response_model=EventRecord, summary="تسجيل حدث أمني جديد وتحليل الخطر")
 async def log_event(event_input: EventDataInput):
     """يسجل حدث أمن جديد ويقوم بحساب درجة خطورته."""
@@ -150,27 +221,36 @@ async def log_event(event_input: EventDataInput):
     event_dict = event_input.model_dump()
     event_dict['timestamp'] = datetime.datetime.now()
     
-    # 2. تحليل وحساب درجة الخطر
-    risk_score = score_event(event_input, app.model)
+    # 2. حساب تجزئة SHA256 (سلسلة الحراسة - CoC)
+    event_dict['event_hash'] = compute_sha256(event_dict)
+    
+    # 3. إضافة ختم الوقت الموثوق (RFC3161 - محاكاة)
+    # RFC3161_TS = get_timestamp(event_dict['event_hash'])
+    # event_dict['rfc3161_timestamp'] = str(RFC3161_TS)
+    
+    # 4. حساب درجة الخطر باستخدام Isolation Forest
+    risk_score = score_event(event_dict)
     event_dict['risk_score'] = risk_score
     
-    # 3. إنشاء سلسلة الحراسة (Chain of Custody) - SHA256
-    event_hash = compute_sha256(event_dict)
-    event_dict['event_hash'] = event_hash
-    
-    # 4. تخزين الحدث في MongoDB
+    # 5. منطق SOAR الفعلي (الرد الآلي)
+    if risk_score == 1.0:
+        print("!! تم اكتشاف حدث خطر. يتم تنفيذ إجراءات الرد الآلي (SOAR) !!")
+        
+        # أ. إرسال تنبيه بالبريد الإلكتروني (العمل الفعلي)
+        send_alert_email(event_dict)
+        
+        # ب. تنفيذ أمر عزل الجهاز (إثبات النية)
+        isolate_device(event_dict['source_ip']) 
+        
+    # 6. التوثيق والتخزين النهائي
     try:
         result = app.events_collection.insert_one(event_dict)
+        # التأكد من إرجاع ObjectId كسلسلة نصية
+        event_dict['_id'] = str(result.inserted_id) 
         
-        # 5. بناء كائن الاستجابة الصحيح:
-        # نخصص ID الذي تم إنشاؤه من MongoDB في القاموس
-        event_dict['_id'] = str(result.inserted_id)
-        
-        # نستخدم القاموس النهائي event_dict لإنشاء كائن EventRecord
-        # هذا يحل مشكلة 'multiple values for _id' (الخطأ 400)
-        return EventRecord(**event_dict)
-
+        return EventRecord.model_validate(event_dict)
     except Exception as e:
+        # هنا قد تحدث مشاكل في الاتصال بقاعدة البيانات
         raise HTTPException(
             status_code=400, 
             detail={"status": "Failed to log event to MongoDB", "error": str(e)}
