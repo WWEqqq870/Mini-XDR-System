@@ -142,7 +142,10 @@ async def lifespan(app: FastAPI):
     print("✅ MongoDB Atlas connection established.")
     
     # --- 2. إعداد نموذج الذكاء الاصطناعي ---
-    # تحميل النموذج الذي تم تدريبه مسبقًا
+    
+
+# تهيئة تطبيق FastAPI
+# تحميل النموذج الذي تم تدريبه مسبقًا
     try:
         app.model = joblib.load('isolation_forest_model.pkl')
         print("✅ AI Model (Isolation Forest) loaded successfully.")
@@ -165,7 +168,8 @@ app = FastAPI(
     title="Mini-XDR System",
     description="منصة للكشف عن التهديدات والرد الآلي (XDR/SOAR) باستخدام الذكاء الاصطناعي.",
     version="1.0.0",
-    docs_url="/docs"
+    docs_url="/docs",
+    lifespan=lifespan
 )
 
 # =================================================================
