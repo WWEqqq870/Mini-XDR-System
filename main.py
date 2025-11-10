@@ -106,31 +106,42 @@ def score_event(event_data: EventDataInput, model) -> float:
 # مسارات FastAPI الرئيسية
 # =================================================================
 
+# =================================================================
+# مسارات FastAPI الرئيسية
+# =================================================================
+
 @app.get("/events", response_model=List[EventRecord], summary="جلب جميع الأحداث الأمنية المسجلة")
 async def list_events():
     """يجلب جميع الوثائق من مجموعة 'events' ويعرضها كقائمة."""
-    try:
-        events_list = []
-        for event in app.events_collection.find():
-            
+    events_list = []
+    # هنا لن نستخدم try/except حول الدالة كلها، بل حول كل عنصر
+    for event in app.events_collection.find():
+        try:
             # 1. تحويل ObjectId إلى str
             event['_id'] = str(event['_id'])
+
+            # 2. التحقق والتحويل الآمن للـ timestamp (لضمان التوافق)
+            if 'timestamp' in event and isinstance(event['timestamp'], datetime.datetime):
+                event['timestamp'] = event['timestamp'].isoformat()
             
-            # 2. **التعديل الحاسم:** التحقق من وجود 'timestamp' قبل التحويل
-            if 'timestamp' in event:
-                # 3. التحويل الآمن
-                if isinstance(event['timestamp'], datetime.datetime):
-                    event['timestamp'] = event['timestamp'].isoformat()
-            
-            events_list.append(event)
-        
+            # 3. محاولة إنشاء نموذج EventRecord
+            # هذا سيضمن أننا لا نضيف إلا الوثائق الكاملة والصحيحة
+            validated_event = EventRecord.model_validate(event) 
+            events_list.append(validated_event)
+
+        except Exception as e:
+            # تجاهل الوثائق غير الصالحة القديمة
+            print(f"Skipping invalid document: {e}") 
+            continue 
+
+    # إذا حدث خطأ MongoDB نفسه (مثل مشكلة في الاتصال)، نستخدم HTTP Exception
+    try:
         return events_list
     except Exception as e:
-        raise HTTPException(
+         raise HTTPException(
             status_code=500, 
-            detail=f"Internal Server Error during data retrieval: {e}" 
+            detail="Error converting documents to response format."
         )
-
 @app.post("/log", response_model=EventRecord, summary="تسجيل حدث أمني جديد وتحليل الخطر")
 async def log_event(event_input: EventDataInput):
     """يسجل حدث أمن جديد ويقوم بحساب درجة خطورته."""
