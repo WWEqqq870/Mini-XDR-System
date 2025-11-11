@@ -160,9 +160,11 @@ app = FastAPI(
     description="منصة للكشف عن التهديدات والرد الآلي (XDR/SOAR) باستخدام الذكاء الاصطناعي.",
     version="1.0.0",
     lifespan=lifespan,
-    # التعديلات التي تجعل الواجهة احترافية:
-    docs_url=None,           # 1. إلغاء واجهة Swagger UI الافتراضية (/docs)
-    redoc_url="/docs"        # 2. تمكين Redoc وجعلها تظهر على المسار /docs
+    
+    # الإعدادات الجديدة لجعل Swagger UI جذاباً (Dark Theme)
+    docs_url="/docs", # واجهة Swagger UI التفاعلية (على المسار الافتراضي /docs)
+    redoc_url=None,   # إلغاء Redoc
+    swagger_ui_parameters={"syntaxHighlight.theme": "monokai"} # تطبيق ثيم Monokai الداكن
 )
 # =================================================================
 # مسارات FastAPI الرئيسية
